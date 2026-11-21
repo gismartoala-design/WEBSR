@@ -1,0 +1,50 @@
+Datos y ejecución IESS — 20 de noviembre de 2026
+
+Origen: /home/gismar/Descargas/SRI_RUC_Guayas.zip
+CSV extraído: padron_guayas.csv (1.987.103 filas de establecimientos).
+Se conservan contribuyentes ACTIVOS y se eliminan duplicados por RUC.
+
+Resultados del filtro:
+  rucs_guayaquil/: 72.666 compañías y 434.634 personas.
+  rucs/:          89.637 compañías y 622.021 personas, todo Guayas.
+El detalle por cantón está en resumen_padron.json.
+La clasificación usa TIPO_CONTRIBUYENTE del padrón SRI.
+Los scripts recibidos sin modificaciones están en originales/.
+Dependencias instaladas en .venv/ y fijadas en requirements.lock.txt.
+
+Ejecución completa:
+  .venv/bin/python -u ejecutar_consultas.py
+Este proceso ejecuta consultar_iess.py --fase companias y después --fase personas.
+Retoma el checkpoint y evita repetir RUC con respuesta terminal, incluidos los
+consultados en la prueba de 50 compañías. No ejecutar las mismas fases en otro
+proceso mientras esta ejecución siga activa.
+
+Archivos para consultar el avance:
+  salida/estado_ejecucion.json: fase, PID del coordinador y estado.
+  logs/companias.log y logs/personas.log: consultas y errores.
+  salida/checkpoint_companias.csv y salida/checkpoint_personas.csv:
+    cada respuesta se guarda inmediatamente.
+  salida/deudores_companias.xlsx y salida/deudores_personas.xlsx:
+    se actualizan cada 100 consultas, al finalizar y ante errores controlados.
+  salida/pdf/: certificados que indican mora y certificados desconocidos.
+
+Estados:
+  AL_DIA: el certificado del RUC dice que no registra obligaciones en mora.
+  EN_MORA: el certificado del RUC dice que sí registra obligaciones en mora.
+  NO_REGISTRADO: respuesta explícita del portal sobre falta de registro.
+  RUC_RECHAZADO_IESS: consta en el padrón SRI, pero IESS dice que el RUC
+    ingresado no es correcto. No implica deuda ni ausencia de deuda.
+Respuestas desconocidas detienen la ejecución para evitar clasificaciones
+incorrectas. Los problemas de conexión tienen reintentos con pausa y se
+conserva el avance. El proceso debe permanecer en un equipo encendido y con red;
+no se ha configurado un servicio para reiniciarlo después de un reinicio del equipo.
+
+Importes:
+La columna capital del CSV conserva el nombre usado por el script original.
+Contiene el monto de mora que figura en el certificado, sin desglose de capital
+e intereses. El Excel lo identifica como Monto mora USD. Un importe vacío no
+significa cero. La fecha de consulta usa America/Guayaquil.
+
+No se aplica el algoritmo original que confundía tipos de contribuyente y
+descartaba RUC del padrón. Referencia del SRI sobre validación de RUC:
+https://www.sri.gob.ec/web/intersri/buscador?_com_liferay_portal_search_web_search_results_portlet_SearchResultsPortlet_INSTANCE_uzxPwvfxyoLa_assetEntryId=64533&_com_liferay_portal_search_web_search_results_portlet_SearchResultsPortlet_INSTANCE_uzxPwvfxyoLa_mvcPath=%2Fview_content.jsp&_com_liferay_portal_search_web_search_results_portlet_SearchResultsPortlet_INSTANCE_uzxPwvfxyoLa_type=content&delta=75&p_p_back_url=%2Fbuscador%3Fq%3Dleyes&p_p_id=com_liferay_portal_search_web_search_results_portlet_SearchResultsPortlet_INSTANCE_uzxPwvfxyoLa&p_p_lifecycle=0&p_p_mode=view&p_p_state=maximized

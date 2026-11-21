@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!consultar_iess.py
+!cloudrun/
+cloudrun/**
+!cloudrun/__init__.py
+!cloudrun/shared.py
+!cloudrun/settings.py
+!cloudrun/sftp_store.py
+!cloudrun/worker.py
+!cloudrun/control.py
+!cloudrun/collect.py
+!cloudrun/requirements.txt

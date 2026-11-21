@@ -1,0 +1,39 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  labels:
+    app: iess-padron
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      taskCount: ${TASK_COUNT}
+      parallelism: ${PARALLELISM}
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: '21600'
+          serviceAccountName: ${SERVICE_ACCOUNT}
+          containers:
+            - image: ${IMAGE}
+              resources:
+                limits:
+                  cpu: '1'
+                  memory: 1Gi
+              env:
+                - name: MANIFEST_URI
+                  value: '${MANIFEST_URI}'
+                - name: CONTROL_OBJECT
+                  value: control/iess.json
+                - name: INITIAL_INTERVAL
+                  value: '4'
+                - name: MIN_INTERVAL
+                  value: '1'
+                - name: STABLE_AFTER
+                  value: '100'
+                - name: MAX_RECORDS
+                  value: '${MAX_RECORDS}'
+${STORAGE_ENV}

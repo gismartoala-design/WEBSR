@@ -1,0 +1,207 @@
+IESS — Docker y Cloud Run Jobs
+Preparado el 20 de noviembre de 2026
+
+NOTA: esta es la guía del modo GCS anterior. Para Hostinger y los pasos actuales,
+consulta README.md. Si eliges esta guía, configura STORAGE_BACKEND=gcs.
+
+Este paquete se despliega desde la carpeta IEES del proyecto. El ZIP contiene
+código e instrucciones. Los padrones y resultados se suben por separado a un
+bucket privado; no se incorporan a la imagen Docker ni al contexto de Cloud Build.
+
+CONFIGURACIÓN INICIAL
+
+1. Trabaja desde IEES. Deben existir rucs/rucs_companias.csv y
+   rucs/rucs_personas.csv. salida/ contiene el avance y PDF de la corrida local.
+   Si usas otro equipo, detén primero la corrida en el equipo original y copia
+   rucs/ y salida/. No es necesario copiar el CSV original de 724 MB.
+
+2. Copia la configuración y edítala:
+
+   cp cloudrun/.env.example cloudrun/.env
+
+   Completa PROJECT_ID, REGION y BUCKET. El bucket debe tener un nombre único.
+   Conserva DATASET=guayas-v1 para este padrón. Otro padrón requiere otro dataset.
+   PARALLELISM=2 es la configuración inicial; no se inicia con 20 contenedores.
+
+3. Prepara las herramientas, si no tienes ya el entorno del proyecto:
+
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -r cloudrun/requirements.txt
+   gcloud auth login
+
+   El proyecto debe tener facturación habilitada. Tu usuario necesita crear
+   recursos Run/Storage/Artifact Registry y cuentas de servicio, y poder actuar
+   como la cuenta iess-worker. El script otorga a esa cuenta acceso a objetos
+   únicamente en el bucket indicado, sin claves JSON dentro de Docker.
+
+PREPARAR Y CONSTRUIR EN GOOGLE CLOUD
+
+   bash cloudrun/deploy.sh setup
+   bash cloudrun/deploy.sh build
+
+setup habilita APIs, crea el repositorio Docker, el bucket privado y la cuenta
+de servicio. build usa Cloud Build y publica la imagen en Artifact Registry.
+Puedes ejecutar estos dos pasos mientras la corrida local sigue activa.
+Si Cloud Build indica permisos insuficientes al publicar, concede
+roles/artifactregistry.writer sobre el repositorio a la cuenta que realmente
+ejecuta tus builds. No se usa una cuenta de servicio con rol Editor para resolverlo.
+
+Alternativa de construcción local, desde IEES:
+
+   docker build -t iess-cloudrun:local .
+
+MIGRAR EL AVANCE Y SUBIR LOS LOTES
+
+Ejecuta estos pasos en el equipo de la corrida local, cuando vayas a migrar:
+
+   .venv/bin/python -m cloudrun.pause_local
+   bash cloudrun/deploy.sh prepare
+   bash cloudrun/deploy.sh upload
+
+pause_local detiene el coordinador y permite que la consulta actual guarde el
+Excel. prepare se niega a continuar mientras el coordinador siga activo, para
+evitar consultar los mismos RUC simultáneamente en local y en la nube.
+
+prepare crea lotes de hasta 1.000 RUC, excluye los que ya tienen respuesta terminal
+y copia el checkpoint y los PDF existentes. Cada lote tiene un hash SHA-256.
+upload sube todo a gs://BUCKET/runs/DATASET/.
+No cambies ni sobrescribas los lotes después de iniciar el job. Si el directorio
+staging/DATASET ya existe, prepare se detiene: reutiliza esa copia sin modificarla
+o prepara otro dataset con un nombre nuevo antes de iniciar consultas.
+
+PRIMER PILOTO Y DESPLIEGUE
+
+   bash cloudrun/deploy.sh pilot companias
+
+El piloto procesa como máximo 20 RUC nuevos del primer lote, con una sola tarea.
+El estado piloto_parcial en progress es normal: queda trabajo en ese lote.
+Comprueba en Cloud Run que el piloto terminó correctamente y revisa sus respuestas.
+Para generar un Excel de ese avance, junto con el avance importado:
+
+   gcloud auth application-default login
+   bash cloudrun/deploy.sh collect companias
+
+El login ADC se necesita para las utilidades Python que ejecutes en tu equipo.
+Cloud Run usa su cuenta de servicio y no necesita ese login.
+
+Para crear la corrida completa y ejecutarla:
+
+   bash cloudrun/deploy.sh deploy companias
+   bash cloudrun/deploy.sh run companias
+
+El YAML completo queda en cloudrun/rendered/companias.yaml. Puedes subir ese YAML
+directamente o ejecutar gcloud run jobs replace sobre él. cloudrun/job.yaml es
+una plantilla: primero hay que generar el YAML con los valores reales.
+
+Cuando compañías termine, procede con personas:
+
+   bash cloudrun/deploy.sh pilot personas
+   bash cloudrun/deploy.sh deploy personas
+   bash cloudrun/deploy.sh run personas
+
+La ejecución remota continúa aunque cierres la terminal o apagues el equipo.
+No vuelvas a iniciar la corrida local con los mismos pendientes después de migrar.
+
+RITMO Y ESCALADO GRADUAL
+
+Todas las tareas y ambas fases comparten BUCKET/control/iess.json:
+  - Inicio: un comienzo de petición cada 4 a 4,3 segundos, entre todos los workers.
+  - Cada 100 respuestas correctas reduce el intervalo un 15%, hasta un mínimo
+    global de 1 segundo más un pequeño margen aleatorio.
+  - Cada tarea consulta un RUC a la vez. Dos contenedores NO significan que cada
+    uno tenga permitido un RUC por segundo: el límite es compartido.
+  - Se regulan tanto GET de formulario como POST de consulta.
+  - Un HTTP 429 o 5xx duplica el intervalo y pausa a todos al menos 60 segundos.
+    Se respeta Retry-After, incluso cuando exige una espera mayor.
+  - Tres errores sin completar una nueva ventana saludable detienen las nuevas
+    consultas de todas las tareas. Puede quedar alguna petición ya en curso.
+  - HTTP 401/403, CAPTCHA, redirecciones o respuestas desconocidas detienen las
+    consultas para revisión manual. No hay rotación de IP ni resolución de CAPTCHA.
+  - No hay reintentos automáticos de la tarea Cloud Run: maxRetries=0 evita que
+    la infraestructura vuelva a consultar un portal que acaba de restringir el acceso.
+
+Esta configuración controla el tráfico, pero no garantiza que IESS acepte la
+automatización ni que nunca aplique restricciones. Cloud Run no aumenta la
+capacidad del servidor del IESS. El mínimo global de 1 segundo limita la velocidad
+teórica a menos de 3.600 peticiones/hora, aunque configures más contenedores.
+No se han hecho pruebas de carga contra IESS desde Google Cloud.
+
+Para pasar de 2 a 3 y luego a 5 tareas concurrentes, cambia PARALLELISM en .env y
+vuelve a desplegar antes de la siguiente ejecución. El cambio de configuración
+del job se aplica a ejecuciones nuevas; no aumenta la concurrencia de una ya activa.
+El renderizador admite hasta 5 como configuración inicial. No eleves el tráfico
+sin medir respuestas, errores y tiempos. El bucket compartido debe ser el mismo
+para todos los jobs que consulten este portal.
+
+AVANCE, PAUSA Y REANUDACIÓN
+
+   bash cloudrun/deploy.sh status companias
+   .venv/bin/python -m cloudrun.control status --bucket TU_BUCKET
+   .venv/bin/python -m cloudrun.control pause --bucket TU_BUCKET
+
+Después de revisar la causa de una detención y terminar Retry-After:
+
+   .venv/bin/python -m cloudrun.control resume --bucket TU_BUCKET
+   bash cloudrun/deploy.sh run companias
+
+resume no vuelve a crear tareas por sí solo. run inicia otra ejecución del job.
+Los lotes completos se omiten y cada lote parcial retoma resultados ya guardados.
+Un bloqueo de lote puede tardar hasta 3 minutos en expirar si su contenedor murió.
+No ejecutes dos copias de la misma fase simultáneamente: los bloqueos rechazarán
+los lotes ocupados y el job duplicado podrá figurar como fallido.
+
+El ritmo mínimo se puede hacer más lento sin reconstruir la imagen:
+
+   .venv/bin/python -m cloudrun.control set-rate --bucket TU_BUCKET --minimum 2
+
+Los valores de INITIAL_INTERVAL/MIN_INTERVAL del YAML se usan para crear el control
+cuando aún no existe. Para cambiar un control existente usa set-rate; no lo borres
+para ignorar una pausa impuesta por el portal.
+
+RESULTADOS Y RESPALDOS
+
+   bash cloudrun/deploy.sh collect companias
+   bash cloudrun/deploy.sh collect personas
+
+CSV, Excel y resumen JSON se generan en cloudrun/downloads/.
+La consolidación puede ejecutarse durante el trabajo. Los reportes parciales se
+actualizan cada 50 RUC por lote y al terminar; su conteo puede ir algo detrás del
+último resultado persistido. Tras una terminación abrupta, reejecuta el job para
+que reconstruya el reporte a partir de los resultados guardados.
+
+En el bucket:
+  runs/DATASET/baseline/      avance local importado
+  runs/DATASET/inputs/        lotes con RUC y razón social
+  runs/DATASET/results/FASE/  un JSON por RUC, guardado inmediatamente
+  runs/DATASET/pdf/FASE/      PDF oficiales de mora
+  runs/DATASET/reports/FASE/  CSV parciales para consolidar
+  runs/DATASET/progress/FASE/ estado por tarea
+  runs/DATASET/leases/FASE/   bloqueos de lotes, con vencimiento
+  control/iess.json          regulación global y pausas
+
+La escritura condicional en Cloud Storage evita sobrescribir un resultado de otro
+proceso. Una interrupción entre la respuesta del IESS y su guardado puede exigir
+repetir esa consulta al reanudar; el portal no ofrece una operación transaccional
+compartida con nuestro almacenamiento. Se evita duplicar resultados persistidos.
+
+AL_DIA y EN_MORA se asignan por el texto del certificado del RUC consultado.
+RUC_RECHAZADO_IESS significa que IESS rechazó el RUC, aunque figure en el padrón
+SRI: no es una afirmación sobre deuda. Los importes son el monto de mora del
+certificado en su fecha de consulta, no un desglose de capital/intereses.
+
+Cada tarea tiene 1 vCPU, 1 GiB y hasta 6 horas. Google cobra la vida completa
+de las tareas, incluidas las esperas, además de almacenamiento y operaciones GCS.
+Un timeout deja guardados los resultados confirmados; vuelve a ejecutar para
+continuar. El bucket debe mantenerse privado y con acceso limitado a tu equipo.
+
+VERIFICACIÓN LOCAL
+
+   .venv/bin/python -m pip install -r cloudrun/requirements-dev.txt
+   .venv/bin/python -m unittest discover -s cloudrun/tests -v
+
+Documentación oficial utilizada:
+https://docs.cloud.google.com/run/docs/create-jobs
+https://docs.cloud.google.com/run/docs/reference/yaml/v1
+https://docs.cloud.google.com/run/docs/jobs-retries
+https://docs.cloud.google.com/storage/docs/request-preconditions
+https://cloud.google.com/run/pricing

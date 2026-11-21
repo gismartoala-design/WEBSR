@@ -92,6 +92,7 @@ class SFTPStore:
         self.sftp = self.client.open_sftp()
         self.sftp.get_channel().settimeout(45)
         self.lock = threading.RLock()
+        self.directories = set()
         self.php = config.get("SFTP_PHP_BIN", "php")
         self.host, self.port = config["FTP_HOST"], int(config.get("FTP_PORT", 65002))
 
@@ -146,16 +147,22 @@ class SFTPStore:
         destination = self.path(key)
         temporary = destination + ".tmp-" + uuid.uuid4().hex
         with self.lock:
-            mkdirs(self.sftp, posixpath.dirname(destination))
+            directory = posixpath.dirname(destination)
+            if directory not in self.directories:
+                mkdirs(self.sftp, directory)
+                self.directories.add(directory)
+            committed = False
             try:
                 self.sftp.putfo(io.BytesIO(raw), temporary, file_size=len(raw))
                 self.sftp.chmod(temporary, 0o600)
                 self.sftp.posix_rename(temporary, destination)
+                committed = True
             finally:
-                try:
-                    self.sftp.remove(temporary)
-                except FileNotFoundError:
-                    pass
+                if not committed:
+                    try:
+                        self.sftp.remove(temporary)
+                    except FileNotFoundError:
+                        pass
 
     def exists(self, key):
         if object_location(key)[1]:

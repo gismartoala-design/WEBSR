@@ -1,0 +1,83 @@
+# Cloud Build para Cloud Run JOBS. Construye y despliega; no ejecuta consultas.
+# Configura el trigger para leer este archivo en vez del despliegue de Services.
+steps:
+  - id: render-job
+    name: python:3.12-slim-bookworm
+    entrypoint: python
+    env:
+      - 'FTP_HOST=${_SFTP_HOST}'
+      - 'FTP_PORT=${_SFTP_PORT}'
+      - 'FTP_USER=${_SFTP_USER}'
+      - 'SFTP_ROOT=${_SFTP_ROOT}'
+      - 'SFTP_HOST_KEY_SHA256=${_SFTP_HOST_KEY_SHA256}'
+      - 'SFTP_PHP_BIN=${_SFTP_PHP_BIN}'
+    args:
+      - -m
+      - cloudrun.render
+      - --phase
+      - '${_PHASE}'
+      - --dataset
+      - '${_DATASET}'
+      - --task-count
+      - '${_TASK_COUNT}'
+      - --mode
+      - '${_MODE}'
+      - --storage
+      - '${_STORAGE_BACKEND}'
+      - --bucket
+      - '${_GCS_BUCKET}'
+      - --password-secret
+      - '${_SFTP_PASSWORD_SECRET}'
+      - --image
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/worker:$BUILD_ID'
+      - --service-account
+      - '${_SERVICE_ACCOUNT_NAME}@$PROJECT_ID.iam.gserviceaccount.com'
+      - --parallelism
+      - '${_PARALLELISM}'
+      - --output
+      - cloudrun/rendered/job.yaml
+  - id: build-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/worker:$BUILD_ID'
+      - .
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/worker:$BUILD_ID'
+  - id: deploy-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - replace
+      - cloudrun/rendered/job.yaml
+      - '--region=${_REGION}'
+      - '--project=$PROJECT_ID'
+substitutions:
+  _REGION: us-central1
+  _REPOSITORY: iess
+  _SERVICE_ACCOUNT_NAME: iess-worker
+  _PHASE: companias
+  _DATASET: guayas-v1
+  _MODE: pilot
+  _TASK_COUNT: '1'
+  _PARALLELISM: '2'
+  _STORAGE_BACKEND: sftp
+  _GCS_BUCKET: ''
+  _SFTP_HOST: ''
+  _SFTP_PORT: '65002'
+  _SFTP_USER: ''
+  _SFTP_ROOT: ''
+  _SFTP_HOST_KEY_SHA256: ''
+  _SFTP_PHP_BIN: /usr/bin/php
+  _SFTP_PASSWORD_SECRET: iess-sftp-password
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/worker:$BUILD_ID'
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s

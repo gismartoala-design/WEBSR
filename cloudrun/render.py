@@ -16,8 +16,8 @@ def render(manifest, bucket, image, account, parallelism=2, pilot=False,
         raise ValueError("Imagen o cuenta de servicio no válida")
     if not 1 <= parallelism <= 5:
         raise ValueError("Paralelismo inicial permitido: 1..5")
-    count = len(manifest["shards"])
-    if not count:
+    count = len(manifest["shards"]) if "shards" in manifest else manifest.get("task_count", 0)
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 10_000:
         raise ValueError("No hay lotes pendientes para esta fase")
     phase, dataset = manifest["phase"], manifest["dataset"]
     if phase not in {"companias", "personas"} or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", dataset):
@@ -59,7 +59,11 @@ def render(manifest, bucket, image, account, parallelism=2, pilot=False,
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--manifest", type=Path, required=True)
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument("--manifest", type=Path)
+    source.add_argument("--task-count", type=int)
+    p.add_argument("--phase", choices=["companias", "personas"], default="companias")
+    p.add_argument("--dataset")
     p.add_argument("--bucket")
     p.add_argument("--storage", choices=["gcs", "sftp"], default="gcs")
     p.add_argument("--password-secret", default="iess-sftp-password")
@@ -67,12 +71,20 @@ def main():
     p.add_argument("--service-account", required=True)
     p.add_argument("--parallelism", type=int, default=2)
     p.add_argument("--pilot", action="store_true")
+    p.add_argument("--mode", choices=["pilot", "full"])
     p.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
+    if a.pilot and a.mode == "full":
+        p.error("--pilot y --mode full son incompatibles")
+    if a.manifest:
+        manifest = json.loads(a.manifest.read_text())
+    else:
+        if not a.dataset: p.error("--task-count requiere --dataset")
+        manifest = dict(phase=a.phase, dataset=a.dataset, task_count=a.task_count)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     from cloudrun.settings import settings
-    a.output.write_text(render(json.loads(a.manifest.read_text()), a.bucket, a.image,
-                               a.service_account, a.parallelism, a.pilot,
+    a.output.write_text(render(manifest, a.bucket, a.image,
+                               a.service_account, a.parallelism, a.pilot or a.mode == "pilot",
                                a.storage, settings(), a.password_secret))
     print(a.output)
 

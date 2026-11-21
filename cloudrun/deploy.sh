@@ -70,6 +70,9 @@ case "${1:-help}" in
   build)
     gcloud builds submit . --tag "$IMAGE" --project "$PROJECT_ID"
     ;;
+  ci)
+    "$PYTHON" -m cloudrun.build_job --phase "$PHASE" --mode "${3:-pilot}"
+    ;;
   prepare)
     "$PYTHON" -m cloudrun.prepare --dataset "$DATASET" --output "$STAGING"
     ;;
@@ -110,6 +113,6 @@ case "${1:-help}" in
     "$PYTHON" -m cloudrun.collect --manifest-uri "$URI" --output cloudrun/downloads --publish
     ;;
   *)
-    echo 'Uso: bash cloudrun/deploy.sh {setup|build|prepare|upload|render|pilot|deploy|run|status|collect} [companias|personas]'
+    echo 'Uso: bash cloudrun/deploy.sh {setup|build|ci|prepare|upload|render|pilot|deploy|run|status|collect} [companias|personas] [pilot|full]'
     ;;
 esac

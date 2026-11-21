@@ -4,6 +4,51 @@ Filtra contribuyentes activos del padrón SRI, consulta el certificado de obliga
 
 Los importes se extraen del certificado del RUC consultado. Son el monto de mora informado en la fecha de consulta; el certificado no ofrece un desglose de capital e intereses. `RUC_RECHAZADO_IESS` significa que el portal rechazó el RUC y no determina su estado de deuda.
 
+## Destino del despliegue: Cloud Run Jobs
+
+Este contenedor ejecuta tareas por lotes. El destino es **Cloud Run → Jobs**, con `kind: Job` y comandos `gcloud run jobs ...`. No proporciona una URL web ni escucha el puerto 8080.
+
+Si el log muestra `gcloud run services.update`, `Creating Revision` y el error de `PORT=8080`, el trigger está desplegando un **Service**. Corregir el puerto o ampliar el timeout no cambia el tipo de proceso del contenedor.
+
+### Corregir un trigger automático de GitHub
+
+1. Abre **Cloud Build → Triggers** y edita el trigger de este repositorio que despliega el servicio.
+2. En configuración del build, elige **archivo de configuración de Cloud Build** del repositorio y la ruta `/cloudbuild.yaml`. La configuración inline generada para el servicio no utiliza este archivo automáticamente.
+3. Desde un equipo con tus `.env`, obtén los valores que debes poner en las sustituciones del trigger:
+
+   ```bash
+   .venv/bin/python -m cloudrun.build_job --phase companias --mode pilot --print-substitutions
+   ```
+
+   Son metadatos de conexión y del job. La contraseña no se imprime: el YAML sigue referenciando Secret Manager.
+
+4. Asegura que ya ejecutaste `bash cloudrun/deploy.sh setup`. El repositorio de imágenes, la cuenta `iess-worker` y el secreto SFTP deben existir.
+5. La cuenta que ejecuta Cloud Build necesita escribir imágenes en Artifact Registry, administrar Jobs de Cloud Run y actuar como la cuenta de servicio del job. Puedes asignarle `roles/artifactregistry.writer` en el repositorio, `roles/run.developer` en el proyecto y `roles/iam.serviceAccountUser` en la cuenta del job. Si usas Cloud Logging con una cuenta personalizada, necesita `roles/logging.logWriter`.
+6. Ejecuta el trigger. El último paso debe ser `gcloud run jobs replace`, y el recurso debe aparecer en **Jobs** como `iess-companias-piloto`.
+
+El pipeline construye, publica la imagen y crea o actualiza el Job. **No inicia consultas al IESS por cada push.** Antes de ejecutarlo deben estar subidos los manifiestos y lotes privados. Luego:
+
+```bash
+gcloud run jobs execute iess-companias-piloto --project TU_PROYECTO --region TU_REGION --wait
+```
+
+### Ejecutar el mismo pipeline desde terminal
+
+```bash
+git pull --ff-only
+gcloud auth login
+bash cloudrun/deploy.sh setup
+bash cloudrun/deploy.sh ci companias pilot
+```
+
+Ese comando usa la configuración local para llenar las sustituciones y desplegar el Job piloto. Puede construir el piloto antes de preparar los lotes; no podrá consultarlos hasta que los hayas preparado y subido con los pasos de migración de abajo. Para desplegar la fase completa:
+
+```bash
+bash cloudrun/deploy.sh ci companias full
+```
+
+El modo completo requiere el manifiesto local y obtiene de él el número exacto de tareas. Al terminar el build, el job queda creado y lo ejecutas con `bash cloudrun/deploy.sh run companias`. No elimines un servicio existente sin revisar antes qué otras funciones tenga; el Job puede crearse por separado.
+
 ## Instalación
 
 ```bash
